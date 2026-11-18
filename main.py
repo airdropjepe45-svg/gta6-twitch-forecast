@@ -50,6 +50,16 @@ still nothing usable the program falls back to the house baseline:
 persistence at hour 1 with a spread widening like a random walk
 (q_tau = p1 * exp(z_tau * 0.15 * sqrt(h - 1))).
 
+One more signal, from the case's own history: the highest hourly count
+in the 24 hours before release day, against hour 1. When hour 1 is a
+deep trough after that peak (peak more than twice hour 1, as in Marvel's
+Wolverine, whose pre-release peak was 2.8x its hour 1 and whose evening
+peak then ran to 9x hour 1), the evening is much less predictable, so
+the spread for hours 13..24 is widened by a quarter. On the four
+practice launches that widening moves the mean loss from 0.280 to 0.277
+(it helps the trough case most and costs the others a little); it only
+ever fires when the case's own history shows a trough that deep.
+
 Why this beats persistence: on the four practice launches (Marvel's
 Wolverine, Red Dead Redemption 2, God of War Ragnarok, Marvel's
 Spider-Man 2), whose answers are public SullyGnome hourly averages,
@@ -183,6 +193,26 @@ def median_and_spread(curves):
     return smooth_med, smooth_sd
 
 
+def pre_peak_ratio(case, p1):
+    """Highest hourly count in the 24 h before the day, over hour 1."""
+    try:
+        day = parse_ts(case["day_start"])
+    except (KeyError, TypeError, ValueError):
+        return 1.0
+    peak = 0
+    for row in case.get("history_hourly") or []:
+        viewers = row.get("viewers")
+        if not viewers:
+            continue
+        try:
+            at = parse_ts(row["from"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if day.timestamp() - 86400 <= at.timestamp() < day.timestamp():
+            peak = max(peak, viewers)
+    return peak / p1 if peak > 0 else 1.0
+
+
 def forecast_case(case, name):
     if case.get("levels") != LEVELS:
         raise ValueError(f"{name} asks for levels {case.get('levels')}, not {LEVELS}")
@@ -190,6 +220,9 @@ def forecast_case(case, name):
     if first is None:
         raise ValueError(f"{name} has no hour-1 print")
     p1 = max(1, first["viewers"])
+    # A deep trough after the pre-release peak means a less predictable
+    # evening: widen the late spread (see the module docstring).
+    trough = pre_peak_ratio(case, p1) > 2.0
 
     curves = filtered_curves(case.get("comparables"))
     hours = []
@@ -198,6 +231,8 @@ def forecast_case(case, name):
         for row in case["forecast"]:
             hour = row["hour"]
             spread = max(0.30, min(sd[hour], 0.80))
+            if trough and hour >= 13:
+                spread = min(spread * 1.25, 1.0)
             q = [
                 round2(p1 * math.exp(med[hour] + z * spread)) for z in Z
             ]
